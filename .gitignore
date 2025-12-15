@@ -15,6 +15,7 @@ logs/
 run_green.ps1
 run_white.ps1
 start_agents.ps1
+AGENTS.md
 
 # Python-generated files
 __pycache__/

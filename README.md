@@ -71,6 +71,19 @@ Expected: prints `em_mean`, `latency_mean`, `n_items`, writes outputs under `out
 ## AgentBeats v2 Remote deployment (Controller)
 Remote mode expects a publicly reachable controller URL per agent. The platform injects `HOST` (default `0.0.0.0`) and `AGENT_PORT` when it boots your process; our agents read these env vars automatically.
 
+### AgentBeats Remote Evaluation
+
+We expose the Green (assessment controller) agent via a public endpoint
+(e.g., ngrok) for AgentBeats remote evaluation.
+
+The White agent runs on the same host and is accessed by the Green agent
+via a local URL (e.g., http://localhost:9002). This design follows the
+controller–worker pattern and avoids exposing multiple public endpoints.
+
+AgentBeats interacts only with the Green agent. All benchmark execution,
+including calls to the White agent and metric aggregation, occurs inside
+the Green agent process.
+
 ### A) Local controller + Cloudflare tunnel
 1. Start each agent via the Linux scripts (they run `uv` with the configured environment defaults and respect controller-provided overrides):
    ```bash

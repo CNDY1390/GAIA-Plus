@@ -1,3 +1,13 @@
+.env
+.cache/
+__pycache__/
+.pytest_cache/
+.venv/
+.uv/
+outputs/
+*.log
+hf_cache/
+data/cache/
 .vscode/
 instructions/
 .env

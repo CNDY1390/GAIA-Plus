@@ -1,5 +1,6 @@
-"""White agent implementation - the target agent being tested."""
+"""GAIA-Plus white agent - minimal LLM wrapper with dummy mode."""
 
+import os
 import uvicorn
 import dotenv
 from a2a.server.apps import A2AStarletteApplication
@@ -11,23 +12,37 @@ from a2a.types import AgentSkill, AgentCard, AgentCapabilities
 from a2a.utils import new_agent_text_message
 from litellm import completion
 
-
 dotenv.load_dotenv()
+
+
+def ensure_required_envs():
+    if os.getenv("WHITE_MODE") == "dummy_correct":
+        print("[white] WHITE_MODE=dummy_correct (OPENAI_API_KEY not required).")
+        return
+    if not os.getenv("OPENAI_API_KEY"):
+        print("[white] ERROR: OPENAI_API_KEY is required unless WHITE_MODE=dummy_correct.")
+        raise SystemExit(1)
+    if not os.getenv("OPENAI_MODEL"):
+        print("[white] OPENAI_MODEL not set; defaulting to gpt-4o-mini.")
+    else:
+        print(f"[white] Using OPENAI_MODEL={os.getenv('OPENAI_MODEL')}")
+    if os.getenv("OPENAI_BASE_URL"):
+        print(f"[white] OPENAI_BASE_URL={os.getenv('OPENAI_BASE_URL')}")
 
 
 def prepare_white_agent_card(url):
     skill = AgentSkill(
-        id="task_fulfillment",
-        name="Task Fulfillment",
-        description="Handles user requests and completes tasks",
-        tags=["general"],
+        id="gaia_answering",
+        name="GAIA short answering",
+        description="Given a question, reply with only the final short answer.",
+        tags=["gaia-plus"],
         examples=[],
     )
     card = AgentCard(
-        name="file_agent",
-        description="Test agent from file",
+        name="gaia_white_agent",
+        description="Minimal GAIA-Plus baseline (LLM passthrough).",
         url=url,
-        version="1.0.0",
+        version="0.2.0",
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],
         capabilities=AgentCapabilities(),
@@ -36,34 +51,59 @@ def prepare_white_agent_card(url):
     return card
 
 
-class GeneralWhiteAgentExecutor(AgentExecutor):
+def _maybe_dummy_answer(prompt: str) -> str | None:
+    if os.getenv("WHITE_MODE") != "dummy_correct":
+        return None
+    # When in dummy mode, if prompt contains GOLD: <answer>, echo it; else echo "dummy".
+    marker = "GOLD:"
+    if marker in prompt:
+        return prompt.split(marker, 1)[1].strip().splitlines()[0]
+    return "dummy"
+
+
+class GaiaWhiteAgentExecutor(AgentExecutor):
     def __init__(self):
-        self.ctx_id_to_messages = {}
+        ensure_required_envs()
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.provider = os.getenv("OPENAI_PROVIDER", "openai")
+        self.base_url = os.getenv("OPENAI_BASE_URL")
+        print(
+            f"[white] starting with model={self.model}, provider={self.provider}, base_url={self.base_url or 'default'}"
+        )
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        # parse the task
         user_input = context.get_user_input()
-        if context.context_id not in self.ctx_id_to_messages:
-            self.ctx_id_to_messages[context.context_id] = []
-        messages = self.ctx_id_to_messages[context.context_id]
-        messages.append(
-            {
-                "role": "user",
-                "content": user_input,
-            }
+        print(
+            f"[white] recv ctx={context.context_id} len={len(user_input)} preview={user_input[:120]!r}"
+        )
+
+        # Dummy correct mode for quick EM self-check.
+        dummy_ans = _maybe_dummy_answer(user_input)
+        if dummy_ans is not None:
+            print("[white] dummy_correct mode hit, echoing gold.")
+            await event_queue.enqueue_event(
+                new_agent_text_message(dummy_ans, context_id=context.context_id)
+            )
+            return
+
+        system_prompt = (
+            "You are a GAIA short-answer agent. "
+            "Read the question and respond with ONLY the final short answer. "
+            "Do not add explanations, punctuation, or multiple words unless required."
         )
         response = completion(
-            messages=messages,
-            model="openai/gpt-4o",
-            custom_llm_provider="openai",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            model=self.model,
+            custom_llm_provider=self.provider,
+            base_url=self.base_url,
             temperature=0.0,
         )
         next_message = response.choices[0].message.model_dump()  # type: ignore
-        messages.append(
-            {
-                "role": "assistant",
-                "content": next_message["content"],
-            }
+        print(
+            f"[white] send ctx={context.context_id} ans_preview={next_message['content'][:120]!r}"
         )
         await event_queue.enqueue_event(
             new_agent_text_message(
@@ -75,13 +115,13 @@ class GeneralWhiteAgentExecutor(AgentExecutor):
         raise NotImplementedError
 
 
-def start_white_agent(agent_name="general_white_agent", host="localhost", port=9002):
+def start_white_agent(agent_name="gaia_white_agent", host="localhost", port=9002):
     print("Starting white agent...")
     url = f"http://{host}:{port}"
     card = prepare_white_agent_card(url)
 
     request_handler = DefaultRequestHandler(
-        agent_executor=GeneralWhiteAgentExecutor(),
+        agent_executor=GaiaWhiteAgentExecutor(),
         task_store=InMemoryTaskStore(),
     )
 

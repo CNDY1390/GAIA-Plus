@@ -1,0 +1,10 @@
+{"id":"gp_001","level":"L1","question":"What is the last word of the surname of the 2023 Nobel Prize in Physics laureate Pierre Agostini? Output only that surname word.","answer":"Agostini","meta":{"domain":"science"}}
+{"id":"gp_002","level":"L1","question":"What is the chemical formula of water? Output only the formula.","answer":"H2O","meta":{"domain":"science"}}
+{"id":"gp_003","level":"L1","question":"What is the capital city of France?","answer":"Paris","meta":{"domain":"geography"}}
+{"id":"gp_004","level":"L1","question":"What is the result of 5 + 7?","answer":"12","meta":{"domain":"math"}}
+{"id":"gp_005","level":"L1","question":"What is the English name of Apple Inc.? Output only the name.","answer":"Apple","meta":{"domain":"business"}}
+{"id":"gp_006","level":"L1","question":"Which element name corresponds to the symbol Fe?","answer":"Iron","meta":{"domain":"science"}}
+{"id":"gp_007","level":"L1","question":"What is the Python function to get the length of a list? Output only the function name.","answer":"len","meta":{"domain":"cs"}}
+{"id":"gp_008","level":"L1","question":"How many red stripes are on the United States flag?","answer":"7","meta":{"domain":"history"}}
+{"id":"gp_009","level":"L1","question":"What is the surname of the author of the Harry Potter series? Output only the surname.","answer":"Rowling","meta":{"domain":"literature"}}
+{"id":"gp_010","level":"L1","question":"What is the pinyin initial abbreviation of the Chinese search engine \"Baidu\"?","answer":"BD","meta":{"domain":"general"}}

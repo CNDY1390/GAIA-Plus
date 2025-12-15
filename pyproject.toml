@@ -1,16 +1,14 @@
 [project]
-name = "agentify-example-tau-bench"
-version = "0.1.0"
-description = "Example code of agentifying tau-bench for the blog `Agentify the Agent Assessment`."
+name = "gaia-plus"
+version = "0.2.0"
+description = "GAIA-Plus agentified benchmark with A2A-compatible green/white agents."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "a2a-sdk[http-server]>=0.3.8",
-    "dotenv>=0.9.9",
-    "tau-bench",
+    "python-dotenv>=1.0.0",
     "typer>=0.19.2",
     "uvicorn>=0.37.0",
+    "litellm>=1.52.0",
+    "pydantic>=2.7.0",
 ]
-
-[tool.uv.sources]
-tau-bench = { git = "https://github.com/sierra-research/tau-bench.git" }

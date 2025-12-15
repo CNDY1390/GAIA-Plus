@@ -1,201 +1,290 @@
-"""Green agent implementation - manages assessment and evaluation."""
+"""GAIA-Plus green agent - orchestrates benchmark over GAIA JSONL."""
 
-import uvicorn
-import tomllib
-import dotenv
 import json
+import os
 import time
-from a2a.server.apps import A2AStarletteApplication
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.agent_execution import AgentExecutor, RequestContext
-from a2a.server.events import EventQueue
-from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCard, SendMessageSuccessResponse, Message
-from a2a.utils import new_agent_text_message, get_text_parts
-from src.my_util import parse_tags, my_a2a
+import re
+import sys
+import uuid
+import subprocess
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# from tau_bench.agents.tool_calling_agent import ToolCallingAgent
-from tau_bench.envs import get_env
-from tau_bench.types import SolveResult, RESPOND_ACTION_NAME, Action
+import dotenv
+import tomllib
+import uvicorn
+from a2a.server.agent_execution import AgentExecutor, RequestContext
+from a2a.server.apps import A2AStarletteApplication
+from a2a.server.events import EventQueue
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.types import AgentCard, Message, SendMessageSuccessResponse
+from a2a.utils import get_text_parts, new_agent_text_message
+from pydantic import BaseModel
+
+from src.my_util import my_a2a
 
 dotenv.load_dotenv()
 
+DEFAULT_DATA_PATH = os.getenv("GAIA_PLUS_DATA", "data/gaia_plus.jsonl")
+DEFAULT_WHITE_URL = os.getenv("WHITE_AGENT_URL", "http://localhost:9002")
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OUTPUTS_DIR = Path("outputs")
 
-def load_agent_card_toml(agent_name):
-    current_dir = __file__.rsplit("/", 1)[0]
-    with open(f"{current_dir}/{agent_name}.toml", "rb") as f:
+
+class GaiaItem(BaseModel):
+    id: str
+    question: str
+    answer: str
+    level: str | None = None
+    meta: Dict[str, Any] | None = None
+
+
+def ensure_required_envs():
+    missing: List[str] = []
+    if not os.getenv("OPENAI_API_KEY") and os.getenv("WHITE_MODE") != "dummy_correct":
+        missing.append("OPENAI_API_KEY (required unless WHITE_MODE=dummy_correct)")
+    if not os.getenv("OPENAI_MODEL"):
+        print("[green] OPENAI_MODEL not set; defaulting to gpt-4o-mini.")
+    else:
+        print(f"[green] Using OPENAI_MODEL={os.getenv('OPENAI_MODEL')}")
+    if os.getenv("OPENAI_BASE_URL"):
+        print(f"[green] OPENAI_BASE_URL={os.getenv('OPENAI_BASE_URL')}")
+    if os.getenv("WHITE_MODE"):
+        print(f"[green] WHITE_MODE={os.getenv('WHITE_MODE')}")
+    if missing:
+        print(f"[green] Missing required env: {', '.join(missing)}. Exiting.")
+        sys.exit(1)
+    data_path = os.getenv("GAIA_PLUS_DATA", DEFAULT_DATA_PATH)
+    if not Path(data_path).exists():
+        print(f"[green] GAIA_PLUS_DATA not found at {data_path}. Exiting.")
+        sys.exit(1)
+    return data_path
+
+
+def get_git_commit() -> Optional[str]:
+    try:
+        return (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], text=True)
+            .strip()
+        )
+    except Exception:
+        return None
+
+
+def load_agent_card_toml(agent_name: str):
+    current_dir = Path(__file__).parent
+    with open(current_dir / f"{agent_name}.toml", "rb") as f:
         return tomllib.load(f)
 
 
-async def ask_agent_to_solve(white_agent_url, env, task_index, max_num_steps=30):
-    # migrated from https://github.com/sierra-research/tau-bench/blob/4754e6b406507dbcbce8e8b3855dcf80aaec18ac/tau_bench/agents/tool_calling_agent.py#L27
-    total_cost = 0.0
-    env_reset_res = env.reset(task_index=task_index)
-    obs = env_reset_res.observation
-    info = env_reset_res.info.model_dump()
-    reward = 0.0
+def load_dataset(path: str | Path) -> tuple[List[GaiaItem], int]:
+    dataset_path = Path(path)
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"GAIA data not found at {dataset_path}")
+    items: List[GaiaItem] = []
+    skipped = 0
+    with open(dataset_path, "r", encoding="utf-8") as f:
+        for lineno, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                item = GaiaItem(**obj)
+                # ensure required fields
+                if not item.id or not item.question or not item.answer:
+                    raise ValueError("missing id/question/answer")
+                items.append(item)
+            except Exception as e:
+                skipped += 1
+                print(f"[green] WARNING: skip line {lineno} due to {e}")
+                continue
+    return items, skipped
 
-    # messages = [
-    #     {"role": "system", "content": env.wiki},
-    #     {"role": "user", "content": obs},
-    # ]
 
-    # Here, instead of calling white agent like calling an LLM, we need to present
-    #   the assessment scenario to the white agent as if it is a independent task
-    # Specifically, here we provide the tool information for the agent to reply with
-    task_description = f"""
-{env.wiki}
-Here's a list of tools you can use (you can use at most one tool at a time):
-{json.dumps(env.tools_info, indent=2)}
-Please response in the JSON format. Please wrap the JSON part with <json>...</json> tags.
-The JSON should contain:
-- "name": the tool call function name, or "{RESPOND_ACTION_NAME}" if you want to respond directly.
-- "kwargs": the arguments for the tool call, or {{"content": "your message here"}} if you want to respond directly.
+def normalize_text(text: str) -> str:
+    # Lowercase, strip whitespace, drop surrounding punctuation-like chars.
+    cleaned = text.strip().lower()
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = cleaned.strip(" .,!?:;\"'()[]{}")
+    return cleaned
 
-Next, I'll provide you with the user message and tool call results.
-User message: {obs}
-    """
 
-    next_green_message = task_description
-    context_id = None
-    for _ in range(max_num_steps):
-        # # --> messages (message history)
-        # res = completion(
-        #     messages=messages,
-        #     model=self.model,
-        #     custom_llm_provider=self.provider,
-        #     tools=self.tools_info,
-        #     temperature=self.temperature,
-        # )
-        # next_message = res.choices[0].message.model_dump()
-        # total_cost += res._hidden_params["response_cost"] or 0
-        # action = message_to_action(next_message)
-        # # --> action (to be executed in the environment)
-        print(
-            f"@@@ Green agent: Sending message to white agent{'ctx_id=' + str(context_id) if context_id else ''}... -->\n{next_green_message}"
-        )
-        white_agent_response = await my_a2a.send_message(
-            white_agent_url, next_green_message, context_id=context_id
-        )
-        res_root = white_agent_response.root
-        assert isinstance(res_root, SendMessageSuccessResponse)
-        res_result = res_root.result
-        assert isinstance(
-            res_result, Message
-        )  # though, a robust design should also support Task
-        if context_id is None:
-            context_id = res_result.context_id
-        else:
-            assert context_id == res_result.context_id, (
-                "Context ID should remain the same in a conversation"
-            )
+def exact_match(pred: str, gold: str) -> float:
+    return float(normalize_text(pred) == normalize_text(gold))
 
-        text_parts = get_text_parts(res_result.parts)
-        assert len(text_parts) == 1, (
-            "Expecting exactly one text part from the white agent"
-        )
-        white_text = text_parts[0]
-        print(f"@@@ White agent response:\n{white_text}")
-        # parse the action out
-        white_tags = parse_tags(white_text)
-        action_json = white_tags["json"]
-        action_dict = json.loads(action_json)
-        action = Action(**action_dict)
 
-        env_response = env.step(action)
-        reward = env_response.reward
-        info = {**info, **env_response.info.model_dump()}
-
-        # instead of maintain history, just prepare the next message with the latest observation
-        if action.name != RESPOND_ACTION_NAME:
-            next_green_message = f"""
-Tool call result:
-{env_response.observation}
-            """
-        else:
-            next_green_message = f"""
-User message:
-{env_response.observation}
-            """
-        if env_response.done:
-            break
-
-    return SolveResult(
-        reward=reward,
-        info=info,
-        messages=[],  # incompatible, thus removed
-        total_cost=total_cost,
+async def ask_white_for_answer(
+    white_agent_url: str, question: str, context_id: str | None = None
+) -> tuple[str, str | None]:
+    print(
+        f"[green] -> white url={white_agent_url} ctx={context_id} q_preview={question[:120]!r}"
     )
+    white_agent_response = await my_a2a.send_message(
+        white_agent_url, question, context_id=context_id
+    )
+    res_root = white_agent_response.root
+    assert isinstance(res_root, SendMessageSuccessResponse)
+    res_result = res_root.result
+    assert isinstance(res_result, Message)
+    text_parts = get_text_parts(res_result.parts)
+    assert (
+        len(text_parts) >= 1
+    ), "Expecting at least one text part from the white agent"
+    answer = text_parts[0]
+    print(
+        f"[green] <- white ctx={res_result.context_id} ans_preview={answer[:120]!r}"
+    )
+    return answer, res_result.context_id
 
 
-class TauGreenAgentExecutor(AgentExecutor):
+class GaiaGreenAgentExecutor(AgentExecutor):
     def __init__(self):
-        pass
+        self.dataset_path = DEFAULT_DATA_PATH
+        self.white_url = DEFAULT_WHITE_URL
+        self.retries = int(os.getenv("GREEN_RETRY", "1"))
+        self.model = DEFAULT_MODEL
+
+    def _parse_task_config(self, user_input: str):
+        # Accept either JSON dict or tag-wrapped url/config.
+        try:
+            cfg = json.loads(user_input)
+            self.white_url = cfg.get("white_agent_url", self.white_url)
+            self.dataset_path = cfg.get("data_path", self.dataset_path)
+            return
+        except Exception:
+            pass
+
+        if "<white_agent_url>" in user_input:
+            start = user_input.split("<white_agent_url>", 1)[1]
+            white_url = start.split("</white_agent_url>", 1)[0].strip()
+            if white_url:
+                self.white_url = white_url
+        if "<gaia_data_path>" in user_input:
+            start = user_input.split("<gaia_data_path>", 1)[1]
+            data_path = start.split("</gaia_data_path>", 1)[0].strip()
+            if data_path:
+                self.dataset_path = data_path
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        # parse the task
         print("Green agent: Received a task, parsing...")
         user_input = context.get_user_input()
-        tags = parse_tags(user_input)
-        white_agent_url = tags["white_agent_url"]
-        env_config_str = tags["env_config"]
-        env_config = json.loads(env_config_str)
+        self._parse_task_config(user_input)
 
-        # set up the environment
-        # migrate from https://github.com/sierra-research/tau-bench/blob/4754e6b406507dbcbce8e8b3855dcf80aaec18ac/tau_bench/run.py#L20
-        print("Green agent: Setting up the environment...")
-        assert len(env_config["task_ids"]) == 1, (
-            "Only single task supported for demo purpose"
+        # Env validation
+        self.dataset_path = ensure_required_envs()
+
+        print(
+            f"Green agent: Starting GAIA evaluation with data={self.dataset_path}, white={self.white_url}, model={self.model}"
         )
-        task_index = env_config["task_ids"][0]
-        env = get_env(
-            env_name=env_config["env"],
-            user_strategy=env_config["user_strategy"],
-            user_model=env_config["user_model"],
-            task_split=env_config["task_split"],
-            user_provider=env_config.get("user_provider", None),
-            task_index=task_index,
-        )
-        metrics = {}
+        items, skipped = load_dataset(self.dataset_path)
+        total_items = skipped + len(items)
+        OUTPUTS_DIR.mkdir(exist_ok=True)
 
-        print("Green agent: Starting evaluation...")
-        timestamp_started = time.time()
-        # TODO: replace
-        # agent = ToolCallingAgent(
-        #     tools_info=env.tools_info,
-        #     wiki=env.wiki,
-        #     model="openai/gpt-4o",
-        #     provider="openai",
-        # )
-        # res = agent.solve(
-        #     env=env,
-        #     task_index=task_index,
-        # )
-        res = await ask_agent_to_solve(white_agent_url, env, task_index)
+        per_item: List[Dict[str, Any]] = []
+        latencies: List[float] = []
+        ems: List[float] = []
+        started_at = datetime.utcnow().isoformat() + "Z"
+        run_id = uuid.uuid4().hex
+        total_start = time.perf_counter()
+        errors = 0
+        successes = 0
 
-        metrics["time_used"] = time.time() - timestamp_started
-        result_bool = metrics["success"] = res.reward == 1
-        result_emoji = "✅" if result_bool else "❌"
+        for item in items:
+            q_text = f"Question: {item.question}\nPlease output only the final short answer."
+            # In dummy_correct mode we optionally embed the gold for the white to echo.
+            if os.getenv("WHITE_MODE") == "dummy_correct":
+                q_text += f"\nGOLD: {item.answer}"
+            t0 = time.perf_counter()
+            pred = ""
+            ctx_id = None
+            error_msg = None
+            for attempt in range(self.retries + 1):
+                try:
+                    pred, ctx_id = await ask_white_for_answer(
+                        self.white_url, q_text, context_id=None
+                    )
+                    break
+                except Exception as e:
+                    error_msg = str(e)
+                    print(f"[green] ERROR attempt {attempt+1} on {item.id}: {e}")
+                    if attempt >= self.retries:
+                        pred = ""
+            latency = time.perf_counter() - t0
 
-        print("Green agent: Evaluation complete.")
+            em = exact_match(pred, item.answer) if pred else 0.0
+            if em == 1.0:
+                successes += 1
+            else:
+                errors += 1 if error_msg else 0
+            per_item.append(
+                {
+                    "id": item.id,
+                    "question": item.question,
+                    "pred": pred,
+                    "gold": item.answer,
+                    "em": em,
+                    "latency": latency,
+                    "context_id": ctx_id,
+                    "error": error_msg,
+                    "level": item.level,
+                }
+            )
+            ems.append(em)
+            latencies.append(latency)
+            print(f"[GAIA] {item.id}: em={em} latency={latency:.3f}s pred={pred}")
+
+        em_mean = sum(ems) / len(ems) if ems else 0.0
+        latency_mean = sum(latencies) / len(latencies) if latencies else 0.0
+        metrics = {
+            "em_mean": em_mean,
+            "latency_mean": latency_mean,
+            "n_items": len(items),
+            "n_total_lines": total_items,
+            "n_skipped": skipped,
+            "n_success": successes,
+            "n_failed": len(items) - successes,
+            "run_id": run_id,
+            "started_at": started_at,
+            "finished_at": datetime.utcnow().isoformat() + "Z",
+            "total_duration": time.perf_counter() - total_start,
+            "git_commit": get_git_commit(),
+        }
+
+        # persist metrics
+        metrics_path = OUTPUTS_DIR / "metrics.json"
+        with open(metrics_path, "w", encoding="utf-8") as f:
+            json.dump({"summary": metrics, "details": per_item}, f, ensure_ascii=False, indent=2)
+        # lightweight csv
+        csv_path = OUTPUTS_DIR / "metrics.csv"
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("id,pred,gold,em,latency\n")
+            for row in per_item:
+                f.write(
+                    f"{row['id']},{row['pred'].replace(',',';')},{row['gold'].replace(',',';')},{row['em']},{row['latency']}\n"
+                )
+
+        print("Green agent: Evaluation complete.", metrics)
         await event_queue.enqueue_event(
             new_agent_text_message(
-                f"Finished. White agent success: {result_emoji}\nMetrics: {metrics}\n"
+                f"Finished GAIA evaluation. em_mean={em_mean:.3f}, latency_mean={latency_mean:.3f}, n_items={len(items)}"
             )
-        )  # alternative, impl as a task-generating agent
+        )
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         raise NotImplementedError
 
 
-def start_green_agent(agent_name="tau_green_agent", host="localhost", port=9001):
+def start_green_agent(agent_name="gaia_green_agent", host="localhost", port=9001):
     print("Starting green agent...")
     agent_card_dict = load_agent_card_toml(agent_name)
     url = f"http://{host}:{port}"
     agent_card_dict["url"] = url  # complete all required card fields
 
     request_handler = DefaultRequestHandler(
-        agent_executor=TauGreenAgentExecutor(),
+        agent_executor=GaiaGreenAgentExecutor(),
         task_store=InMemoryTaskStore(),
     )
 

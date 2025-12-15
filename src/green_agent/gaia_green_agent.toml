@@ -1,0 +1,27 @@
+name = "gaia_green_agent"
+description = "GAIA-Plus benchmark orchestrator (green agent)."
+version = "0.2.0"
+
+defaultInputModes = ["text"]
+defaultOutputModes = ["text"]
+[capabilities]
+streaming = false
+
+[[skills]]
+id = "host_assess_gaia"
+name = "GAIA-Plus assessment hosting"
+description = """
+Run GAIA/GAIA-Plus JSONL benchmark: send questions to a white agent, collect answers, compute normalized exact match and latency.
+"""
+tags = ["green agent", "assessment hosting", "gaia-plus"]
+examples = ["""    
+Run GAIA-Plus on this white agent:
+<white_agent_url>
+http://localhost:9002/
+</white_agent_url>
+Use this dataset:
+<gaia_data_path>
+data/gaia_plus.jsonl
+</gaia_data_path>
+    """]
+

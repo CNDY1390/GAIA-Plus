@@ -277,10 +277,26 @@ class GaiaGreenAgentExecutor(AgentExecutor):
         raise NotImplementedError
 
 
-def start_green_agent(agent_name="gaia_green_agent", host="localhost", port=9001):
+def _resolve_binding(default_host: str, default_port: int) -> tuple[str, int]:
+    env_host = os.getenv("HOST")
+    env_port = os.getenv("AGENT_PORT")
+    host = env_host or default_host
+    port = int(env_port) if env_port else default_port
+    return host, port
+
+
+def start_green_agent(
+    agent_name: str = "gaia_green_agent",
+    host: str | None = None,
+    port: int | None = None,
+):
     print("Starting green agent...")
+    resolved_host, resolved_port = _resolve_binding(
+        host or "localhost",
+        port if port is not None else 9001,
+    )
     agent_card_dict = load_agent_card_toml(agent_name)
-    url = f"http://{host}:{port}"
+    url = f"http://{resolved_host}:{resolved_port}"
     agent_card_dict["url"] = url  # complete all required card fields
 
     request_handler = DefaultRequestHandler(
@@ -293,4 +309,12 @@ def start_green_agent(agent_name="gaia_green_agent", host="localhost", port=9001
         http_handler=request_handler,
     )
 
-    uvicorn.run(app.build(), host=host, port=port)
+    uvicorn.run(app.build(), host=resolved_host, port=resolved_port)
+
+
+if __name__ == "__main__":
+    import os
+
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("AGENT_PORT", "9001"))
+    start_green_agent("gaia_green_agent", host, port)

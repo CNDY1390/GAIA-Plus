@@ -115,9 +115,25 @@ class GaiaWhiteAgentExecutor(AgentExecutor):
         raise NotImplementedError
 
 
-def start_white_agent(agent_name="gaia_white_agent", host="localhost", port=9002):
+def _resolve_binding(default_host: str, default_port: int) -> tuple[str, int]:
+    env_host = os.getenv("HOST")
+    env_port = os.getenv("AGENT_PORT")
+    host = env_host or default_host
+    port = int(env_port) if env_port else default_port
+    return host, port
+
+
+def start_white_agent(
+    agent_name: str = "gaia_white_agent",
+    host: str | None = None,
+    port: int | None = None,
+):
     print("Starting white agent...")
-    url = f"http://{host}:{port}"
+    resolved_host, resolved_port = _resolve_binding(
+        host or "localhost",
+        port if port is not None else 9002,
+    )
+    url = f"http://{resolved_host}:{resolved_port}"
     card = prepare_white_agent_card(url)
 
     request_handler = DefaultRequestHandler(
@@ -130,4 +146,12 @@ def start_white_agent(agent_name="gaia_white_agent", host="localhost", port=9002
         http_handler=request_handler,
     )
 
-    uvicorn.run(app.build(), host=host, port=port)
+    uvicorn.run(app.build(), host=resolved_host, port=resolved_port)
+
+
+if __name__ == "__main__":
+    import os
+
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("AGENT_PORT", "9002"))
+    start_white_agent("gaia_white_agent", host, port)

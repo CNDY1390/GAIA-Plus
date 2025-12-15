@@ -11,7 +11,10 @@ data/cache/
 .vscode/
 instructions/
 .env
-*.log
+logs/
+run_green.ps1
+run_white.ps1
+start_agents.ps1
 
 # Python-generated files
 __pycache__/

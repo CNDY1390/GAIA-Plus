@@ -38,7 +38,7 @@ GAIA/GAIA-Plus benchmark on A2A: **Green orchestrator** reads GAIA JSONL, calls 
 ```bash
 uv sync
 ```
-Create a `.env` (do **not** commit it; already in `.gitignore`):
+Copy `.env.example` to `.env` (already ignored) and fill in your keys:
 ```
 OPENAI_API_KEY=sk-...             # required unless WHITE_MODE=dummy_correct
 OPENAI_MODEL=gpt-4o-mini          # default shown at startup
@@ -50,12 +50,12 @@ WHITE_MODE=dummy_correct          # optional: white echoes GOLD for self-check
 GREEN_RETRY=1                     # optional retry for white calls
 ```
 
-## Run locally
-- One-shot (starts green+white, runs all items):
+## Local development (one-shot launcher)
+- Launches green+white locally, runs GAIA sample, writes metrics:
 ```bash
 uv run python main.py launch
 ```
-- Individually:
+- Individual agents for debugging (uses env HOST/AGENT_PORT defaults):
 ```bash
 uv run python main.py white   # baseline only
 uv run python main.py green   # orchestrator only
@@ -68,24 +68,36 @@ Expected: prints `em_mean`, `latency_mean`, `n_items`, writes outputs under `out
   - Details per item: `id`, `question`, `pred`, `gold`, `em`, `latency`, `context_id`, `error`, `level`.
 - `outputs/metrics.csv`: lightweight view (`id,pred,gold,em,latency`).
 
-## Deploy / AgentBeats v2
-1) Start locally (or on a VM):
-```bash
-uv run python main.py green   # listens on 9001
-uv run python main.py white   # listens on 9002
-```
-2) Expose both via Cloudflare (two tunnels):
-```bash
-cloudflared tunnel --url http://localhost:9001   # green public URL
-cloudflared tunnel --url http://localhost:9002   # white public URL
-```
-3) Register agents in AgentBeats v2 UI:
-   - Green agent: use its public URL; card served at `/.well-known/agent-card.json`.
-   - White agent: same.
-4) Launch an assessment/battle in AgentBeats UI:
-   - Choose green as the task owner; provide the white agent URL (public tunnel) and optional `gaia_data_path` if overriding default.
-   - Start assessment; platform calls green, which calls white per item; metrics stored by platform.
-5) Copy the assessment link for submission.
+## AgentBeats v2 Remote deployment (Controller)
+Remote mode expects a publicly reachable controller URL per agent. The platform injects `HOST` (default `0.0.0.0`) and `AGENT_PORT` when it boots your process; our agents read these env vars automatically.
+
+### A) Local controller + Cloudflare tunnel
+1. Start each agent via the Linux scripts (they run `uv` with the configured environment defaults and respect controller-provided overrides):
+   ```bash
+   ./run_white.sh   # default port 9002
+   ./run_green.sh   # default port 9001
+   ```
+2. For local testing, export your own ports before running (optional):
+   ```bash
+   HOST=127.0.0.1 AGENT_PORT=9101 ./run_white.sh
+   ```
+3. Expose each agent with separate tunnels:
+   ```bash
+   cloudflared tunnel --url http://localhost:9001   # green controller URL
+   cloudflared tunnel --url http://localhost:9002   # white controller URL
+   ```
+
+### B) Cloud VM (direct HTTPS)
+1. Provision a VM (Ubuntu LTS recommended) with ports 80/443 opened.
+2. Install `uv`, `python3.11+`, repo, and `.env`.
+3. Run `./run_green.sh` and `./run_white.sh` in tmux/screen; use a reverse proxy (nginx / Caddy / Traefik) for HTTPS termination and to map stable URLs to `HOST=0.0.0.0` with the injected `AGENT_PORT`.
+
+### AgentBeats UI checklist
+1. Create two remote agents (green + white).
+2. For each card, paste the corresponding public controller URL (from Cloudflare or your VM) into the Controller URL field.
+3. Click **Check Again** until `Controller Reachable: Yes`.
+4. Start an assessment: choose green as task owner, paste the white controller URL into the run configuration (or rely on default `WHITE_AGENT_URL`).
+5. Wait for completion, copy the assessment link, and submit for Q11.
 
 ## Troubleshooting
 - Missing key/model: startup prints clear errors and exits; set `OPENAI_API_KEY` (unless `dummy_correct`) and `OPENAI_MODEL`.

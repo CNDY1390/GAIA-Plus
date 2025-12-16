@@ -2,8 +2,6 @@
 
 import os
 import uvicorn
-from starlette.requests import Request
-from starlette.responses import JSONResponse
 import dotenv
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -148,35 +146,7 @@ def start_white_agent(
         http_handler=request_handler,
     )
 
-    starlette_app = app.build()
-
-    # --- BEGIN PATCH: dynamic agent-card url for reverse proxy/cloudflared ---
-    async def patched_agent_card(request: Request):
-        xf_host = request.headers.get("x-forwarded-host")
-        xf_proto = request.headers.get("x-forwarded-proto")
-        xf_prefix = request.headers.get("x-forwarded-prefix") or ""
-
-        env_host = os.getenv("CLOUDRUN_HOST")
-        env_proto = (
-            "https"
-            if str(os.getenv("HTTPS_ENABLED", "")).lower() in ("1", "true", "yes")
-            else "http"
-        )
-
-        host = xf_host or env_host
-        proto = xf_proto or (env_proto if env_host else request.url.scheme)
-
-        card_dict = dict(app.agent_card.model_dump())
-        if host:
-            card_dict["url"] = f"{proto}://{host}{xf_prefix}"
-        return JSONResponse(card_dict)
-
-    starlette_app.add_route(
-        "/.well-known/agent-card.json", patched_agent_card, methods=["GET"]
-    )
-    # --- END PATCH ---
-
-    uvicorn.run(starlette_app, host=resolved_host, port=resolved_port)
+    uvicorn.run(app.build(), host=resolved_host, port=resolved_port)
 
 
 def main():

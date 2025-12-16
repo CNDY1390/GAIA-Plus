@@ -151,7 +151,6 @@ def start_white_agent(
     starlette_app = app.build()
 
     # --- BEGIN PATCH: dynamic agent-card url for reverse proxy/cloudflared ---
-    @starlette_app.get("/.well-known/agent-card.json")
     async def patched_agent_card(request: Request):
         xf_host = request.headers.get("x-forwarded-host")
         xf_proto = request.headers.get("x-forwarded-proto")
@@ -172,6 +171,9 @@ def start_white_agent(
             card_dict["url"] = f"{proto}://{host}{xf_prefix}"
         return JSONResponse(card_dict)
 
+    starlette_app.add_route(
+        "/.well-known/agent-card.json", patched_agent_card, methods=["GET"]
+    )
     # --- END PATCH ---
 
     uvicorn.run(starlette_app, host=resolved_host, port=resolved_port)

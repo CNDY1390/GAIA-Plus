@@ -133,8 +133,7 @@ def start_white_agent(
         host or "localhost",
         port if port is not None else 9002,
     )
-    url = f"http://{resolved_host}:{resolved_port}"
-    card = prepare_white_agent_card(url)
+    card = prepare_white_agent_card(os.getenv("AGENT_URL"))
 
     request_handler = DefaultRequestHandler(
         agent_executor=GaiaWhiteAgentExecutor(),

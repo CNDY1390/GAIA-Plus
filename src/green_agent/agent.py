@@ -142,7 +142,7 @@ async def ask_white_for_answer(
 class GaiaGreenAgentExecutor(AgentExecutor):
     def __init__(self):
         self.dataset_path = DEFAULT_DATA_PATH
-        self.white_url = os.getenv("WHITE_AGENT_URL")
+        self.white_url = None
         self.retries = int(os.getenv("GREEN_RETRY", "1"))
         self.model = DEFAULT_MODEL
 
@@ -150,8 +150,10 @@ class GaiaGreenAgentExecutor(AgentExecutor):
         # Accept either JSON dict or tag-wrapped url/config.
         try:
             cfg = json.loads(user_input)
-            self.white_url = cfg.get("white_agent_url", self.white_url)
-            self.dataset_path = cfg.get("data_path", self.dataset_path)
+            if "white_agent_url" in cfg:
+                self.white_url = cfg["white_agent_url"]
+            if "data_path" in cfg:
+                self.dataset_path = cfg["data_path"]
             return
         except Exception:
             pass
@@ -176,7 +178,7 @@ class GaiaGreenAgentExecutor(AgentExecutor):
         self.dataset_path = ensure_required_envs()
         
         if not self.white_url:
-            error_msg = "WHITE_AGENT_URL not set. Must be provided via environment variable or task config."
+            error_msg = "white_agent_url not provided in task config."
             print(f"[green] ERROR: {error_msg}")
             await event_queue.enqueue_event(
                 new_agent_text_message(f"Error: {error_msg}")
@@ -303,8 +305,7 @@ def start_green_agent(
         port if port is not None else 9001,
     )
     agent_card_dict = load_agent_card_toml(agent_name)
-    url = f"http://{resolved_host}:{resolved_port}"
-    agent_card_dict["url"] = url  # complete all required card fields
+    agent_card_dict["url"] = os.getenv("AGENT_URL")
 
     request_handler = DefaultRequestHandler(
         agent_executor=GaiaGreenAgentExecutor(),

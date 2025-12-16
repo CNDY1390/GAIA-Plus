@@ -28,7 +28,6 @@ from my_util import my_a2a
 dotenv.load_dotenv()
 
 DEFAULT_DATA_PATH = os.getenv("GAIA_PLUS_DATA", "data/gaia_plus.jsonl")
-DEFAULT_WHITE_URL = os.getenv("WHITE_AGENT_URL", "http://localhost:9002")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OUTPUTS_DIR = Path("outputs")
 
@@ -143,7 +142,7 @@ async def ask_white_for_answer(
 class GaiaGreenAgentExecutor(AgentExecutor):
     def __init__(self):
         self.dataset_path = DEFAULT_DATA_PATH
-        self.white_url = DEFAULT_WHITE_URL
+        self.white_url = os.getenv("WHITE_AGENT_URL")
         self.retries = int(os.getenv("GREEN_RETRY", "1"))
         self.model = DEFAULT_MODEL
 
@@ -175,6 +174,14 @@ class GaiaGreenAgentExecutor(AgentExecutor):
 
         # Env validation
         self.dataset_path = ensure_required_envs()
+        
+        if not self.white_url:
+            error_msg = "WHITE_AGENT_URL not set. Must be provided via environment variable or task config."
+            print(f"[green] ERROR: {error_msg}")
+            await event_queue.enqueue_event(
+                new_agent_text_message(f"Error: {error_msg}")
+            )
+            return
 
         print(
             f"Green agent: Starting GAIA evaluation with data={self.dataset_path}, white={self.white_url}, model={self.model}"

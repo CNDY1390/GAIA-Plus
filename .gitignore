@@ -16,6 +16,17 @@ run_green.ps1
 run_white.ps1
 start_agents.ps1
 AGENTS.md
+.ab
+.venv/
+.ab/
+.ab-work/
+__pycache__/
+*.pyc
+outputs/
+data/
+cloudflared.exe
+*.ps1
+
 
 # Python-generated files
 __pycache__/

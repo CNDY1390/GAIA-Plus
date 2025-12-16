@@ -11,4 +11,5 @@ dependencies = [
     "uvicorn>=0.37.0",
     "litellm>=1.52.0",
     "pydantic>=2.7.0",
+    "earthshaker>=0.2.1",
 ]

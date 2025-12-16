@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 export HOST="${HOST:-0.0.0.0}"
-export AGENT_PORT="${AGENT_PORT:-9002}"
+: "${AGENT_PORT:?AGENT_PORT not set}"
 export PYTHONPATH="src"
 
-uv run python -m white_agent.agent
+exec uv run python -m white_agent.agent

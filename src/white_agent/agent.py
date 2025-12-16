@@ -149,9 +149,13 @@ def start_white_agent(
     uvicorn.run(app.build(), host=resolved_host, port=resolved_port)
 
 
-if __name__ == "__main__":
+def main():
     import os
 
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("AGENT_PORT", "9002"))
     start_white_agent("gaia_white_agent", host, port)
+
+
+if __name__ == "__main__":
+    main()

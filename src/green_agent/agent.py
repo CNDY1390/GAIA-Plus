@@ -23,7 +23,7 @@ from a2a.types import AgentCard, Message, SendMessageSuccessResponse
 from a2a.utils import get_text_parts, new_agent_text_message
 from pydantic import BaseModel
 
-from src.my_util import my_a2a
+from my_util import my_a2a
 
 dotenv.load_dotenv()
 
@@ -312,9 +312,13 @@ def start_green_agent(
     uvicorn.run(app.build(), host=resolved_host, port=resolved_port)
 
 
-if __name__ == "__main__":
+def main():
     import os
 
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("AGENT_PORT", "9001"))
     start_green_agent("gaia_green_agent", host, port)
+
+
+if __name__ == "__main__":
+    main()

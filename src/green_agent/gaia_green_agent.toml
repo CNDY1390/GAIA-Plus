@@ -17,7 +17,7 @@ tags = ["green agent", "assessment hosting", "gaia-plus"]
 examples = ["""    
 Run GAIA-Plus on this white agent:
 <white_agent_url>
-http://localhost:9002/
+http://127.0.0.1:9002
 </white_agent_url>
 Use this dataset:
 <gaia_data_path>

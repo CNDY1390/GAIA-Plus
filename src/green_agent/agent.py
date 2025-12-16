@@ -311,8 +311,10 @@ def start_green_agent(
         http_handler=request_handler,
     )
 
+    starlette_app = app.build()
+
     # --- BEGIN PATCH: dynamic agent-card url for reverse proxy/cloudflared ---
-    @app.get("/.well-known/agent-card.json")
+    @starlette_app.get("/.well-known/agent-card.json")
     async def patched_agent_card(request: Request):
         xf_host = request.headers.get("x-forwarded-host")
         xf_proto = request.headers.get("x-forwarded-proto")
@@ -328,18 +330,14 @@ def start_green_agent(
         host = xf_host or env_host
         proto = xf_proto or (env_proto if env_host else request.url.scheme)
 
-        card = (
-            agent_card_dict.copy()
-            if isinstance(agent_card_dict, dict)
-            else dict(app.agent_card.model_dump())
-        )
+        card = dict(app.agent_card.model_dump())
         if host:
             card["url"] = f"{proto}://{host}{xf_prefix}"
         return JSONResponse(card)
 
     # --- END PATCH ---
 
-    uvicorn.run(app.build(), host=resolved_host, port=resolved_port)
+    uvicorn.run(starlette_app, host=resolved_host, port=resolved_port)
 
 
 def main():

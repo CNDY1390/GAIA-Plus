@@ -8,3 +8,13 @@
 {"id":"agentbeats_008","level":"L1","question":"Which contributor to the version of OpenCV where support was added for the Mask-RCNN model has the same name as a former Chinese head of government when the names are transliterated to the Latin alphabet?","answer":"Li Peng"}
 {"id":"agentbeats_009","level":"L1","question":"What is the maximum length in meters of #9 in the first National Geographic short on YouTube that was ever released according to the Monterey Bay Aquarium website? Just give the number.","answer":"1.8"}
 {"id":"agentbeats_010","level":"L1","question":"The photograph in the Whitney Museum of American Art's collection with accession number 2022.128 shows a person holding a book. Which military unit did the author of this book join in 1813? Answer without using articles.","answer":"Russian-German Legion"}
+{"id":"agentbeats_011","level":"L1","question":"Which film won the Academy Award for Best Picture at the 96th Academy Awards ceremony in 2024?","answer":"Oppenheimer"}
+{"id":"agentbeats_012","level":"L1","question":"What is the name of the primary mirror on the James Webb Space Telescope that consists of 18 hexagonal segments?","answer":"Optical Telescope Element (OTE)"}
+{"id":"agentbeats_013","level":"L1","question":"According to the NOAA Global Climate Report, what was the global average surface temperature anomaly in 2023 relative to the 20th-century average?","answer":"1.45"}
+{"id":"agentbeats_014","level":"L1","question":"According to the World Bank, what was the GDP growth rate of China in 2022?","answer":"3.1"}
+{"id":"agentbeats_015","level":"L1","question":"In which city were the 2024 Summer Olympics held?","answer":"Paris"}
+{"id":"agentbeats_016","level":"L1","question":"According to the United Nations' World Population Prospects 2022, what global population milestone in billions was reached in 2022?","answer":"8.0"}
+{"id":"agentbeats_017","level":"L1","question":"In what year did Albert Einstein publish his four groundbreaking papers, including the one on the theory of special relativity, often called his 'annus mirabilis'?","answer":"1905"}
+{"id":"agentbeats_018","level":"L1","question":"What is the world's largest hot desert, covering much of North Africa?","answer":"Sahara Desert"}
+{"id":"agentbeats_019","level":"L1","question":"Which researcher, known as one of the 'godfathers of AI', won the 2018 Turing Award for work on neural networks and deep learning? Answer with first and last name.","answer":"Geoffrey Hinton"}
+{"id":"agentbeats_020","level":"L1","question":"According to the U.S. Energy Information Administration, what percentage of U.S. electricity generation came from renewable sources in 2023?","answer":"22.6"}

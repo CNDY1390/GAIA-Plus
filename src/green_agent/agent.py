@@ -128,6 +128,68 @@ def _safe_parse_task_payload(raw: str) -> Dict[str, Any]:
         return {"text": raw}
 
 
+WHITE_URL_TAG_RE = re.compile(
+    r"<white_agent_url>(.*?)</white_agent_url>", re.IGNORECASE | re.DOTALL
+)
+GAIA_DATA_PATH_TAG_RE = re.compile(
+    r"<gaia_data_path>(.*?)</gaia_data_path>", re.IGNORECASE | re.DOTALL
+)
+
+
+def parse_task(user_input: str) -> Dict[str, Any]:
+    """
+    Parse the inbound task description.
+
+    1) First, try strict JSON parsing.
+    2) If JSON fails, fall back to extracting tags like
+       <white_agent_url>...</white_agent_url> and
+       <gaia_data_path>...</gaia_data_path> via regex.
+    """
+    raw_text = user_input or ""
+    text = raw_text.strip()
+    result: Dict[str, Any] = {
+        "raw_text": raw_text,
+        "payload": {},
+        "white_urls": [],
+        "gaia_data_path": None,
+    }
+
+    if not text:
+        return result
+
+    # 1) JSON branch
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            payload: Dict[str, Any] = parsed
+        else:
+            payload = {"data": parsed}
+        result["payload"] = payload
+        print("[green] inbound task payload (JSON):")
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        # Let the structured extractor handle URL discovery.
+        result["white_urls"] = extract_white_urls(None, payload)
+        return result
+    except json.JSONDecodeError:
+        # 2) Non-JSON branch; use tag-based extraction.
+        result["payload"] = {"text": raw_text}
+        print("[green] inbound task payload (non-JSON, raw preview):")
+        print(raw_text[:300])
+
+        white_urls = [
+            m.strip() for m in WHITE_URL_TAG_RE.findall(text) if m.strip()
+        ]
+        result["white_urls"] = white_urls
+
+        m = GAIA_DATA_PATH_TAG_RE.search(text)
+        if m:
+            gaia_path = m.group(1).strip()
+            if gaia_path:
+                result["gaia_data_path"] = gaia_path
+
+        return result
+
+
 def extract_white_urls(request_dump: Dict[str, Any] | None, task_payload: Dict[str, Any]) -> List[str]:
     def _extract_from_obj(obj: Dict[str, Any]) -> List[str]:
         urls: List[str] = []
@@ -159,12 +221,7 @@ def extract_white_urls(request_dump: Dict[str, Any] | None, task_payload: Dict[s
     if urls:
         return urls
 
-    # 3) finally from env (local debug only)
-    env_url = os.getenv("DEFAULT_WHITE_AGENT_URL")
-    if env_url:
-        return [env_url]
-
-    raise RuntimeError("No white agent URL found from request/task/env.")
+    raise RuntimeError("No white agent URL found in request/task payload.")
 
 
 async def ask_white_for_answer(
@@ -201,6 +258,9 @@ class GaiaGreenAgentExecutor(AgentExecutor):
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         print("Green agent: Received a task, parsing...")
 
+        user_input = context.get_user_input()
+        print(f"[green] user_input_repr={user_input!r}")
+
         raw_request = getattr(context, "request", None)
         print(f"[green] inbound RequestContext.request type={type(raw_request)}")
         request_dump: Dict[str, Any] | None = None
@@ -225,12 +285,22 @@ class GaiaGreenAgentExecutor(AgentExecutor):
                 except TypeError:
                     print(request_dump)
 
-        user_input = context.get_user_input()
-        task_payload = _safe_parse_task_payload(user_input)
-        print("[green] inbound task payload:")
-        print(json.dumps(task_payload, indent=2, ensure_ascii=False))
+        parsed_task = parse_task(user_input)
+        task_payload = parsed_task.get("payload") or {}
 
-        white_urls = extract_white_urls(request_dump, task_payload)
+        white_urls: List[str] = list(parsed_task.get("white_urls") or [])
+        if not white_urls and request_dump is not None:
+            try:
+                white_urls = extract_white_urls(request_dump, task_payload)
+            except RuntimeError:
+                white_urls = []
+
+        if not white_urls:
+            raw_preview = (parsed_task.get("raw_text") or "")[:300]
+            raise RuntimeError(
+                f"[green] No white_agent_url found in task. raw_text_preview={raw_preview!r}"
+            )
+
         self.white_url = white_urls[0]
 
         print(f"[green] resolved white URLs={white_urls}")

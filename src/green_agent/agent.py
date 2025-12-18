@@ -78,6 +78,52 @@ def load_agent_card_toml(agent_name: str):
         return tomllib.load(f)
 
 
+def _normalize_raw_item(obj: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize a raw JSONL object into the GaiaItem schema.
+
+    Supports:
+    - Native GAIA-Plus lines with id/question/answer/level/meta.
+    - NewDataset-style lines with task_id/Question/Final answer/Level
+      plus nested Annotator/Efficiency/Evidence blocks.
+    """
+    # Native GAIA-Plus schema.
+    if "id" in obj and "question" in obj and "answer" in obj:
+        return {
+            "id": obj["id"],
+            "question": obj["question"],
+            "answer": obj["answer"],
+            "level": obj.get("level"),
+            "meta": obj.get("meta"),
+        }
+
+    # NewDataset-style schema.
+    if "task_id" in obj and "Question" in obj and "Final answer" in obj:
+        meta: Dict[str, Any] = {}
+        if "Annotator Metadata" in obj:
+            meta["annotator"] = obj["Annotator Metadata"]
+        if "Efficiency Metrics" in obj:
+            meta["efficiency"] = obj["Efficiency Metrics"]
+        if "Evidence Metrics" in obj:
+            meta["evidence"] = obj["Evidence Metrics"]
+        if meta:
+            meta["source"] = "NewDataset"
+
+        level_value = obj.get("Level")
+        level_str = str(level_value) if level_value is not None else None
+
+        return {
+            "id": str(obj["task_id"]),
+            "question": obj["Question"],
+            "answer": obj["Final answer"],
+            "level": level_str,
+            "meta": meta or None,
+        }
+
+    # For any other schema we just pass through; GaiaItem validation will decide.
+    return obj
+
+
 def load_dataset(path: str | Path) -> tuple[List[GaiaItem], int]:
     dataset_path = Path(path)
     if not dataset_path.exists():
@@ -91,7 +137,8 @@ def load_dataset(path: str | Path) -> tuple[List[GaiaItem], int]:
                 continue
             try:
                 obj = json.loads(line)
-                item = GaiaItem(**obj)
+                normalized = _normalize_raw_item(obj)
+                item = GaiaItem(**normalized)
                 # ensure required fields
                 if not item.id or not item.question or not item.answer:
                     raise ValueError("missing id/question/answer")
@@ -224,9 +271,20 @@ def extract_white_urls(request_dump: Dict[str, Any] | None, task_payload: Dict[s
     raise RuntimeError("No white agent URL found in request/task payload.")
 
 
+def _snapshot_env_for_report() -> Dict[str, Any]:
+    """Collect non-sensitive environment variables for logging."""
+    hidden_keys = {"OPENAI_API_KEY"}
+    env_snapshot: Dict[str, Any] = {}
+    for key, value in os.environ.items():
+        if any(s in key.upper() for s in hidden_keys):
+            continue
+        env_snapshot[key] = value
+    return env_snapshot
+
+
 async def ask_white_for_answer(
     white_agent_url: str, question: str, context_id: str | None = None
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, Dict[str, Any]]:
     print(
         f"[green] -> white url={white_agent_url} ctx={context_id} q_preview={question[:120]!r}"
     )
@@ -245,7 +303,28 @@ async def ask_white_for_answer(
     print(
         f"[green] <- white ctx={res_result.context_id} ans_preview={answer[:120]!r}"
     )
-    return answer, res_result.context_id
+
+    # Per-response HTML snapshot for later debugging.
+    per_call_dir = OUTPUTS_DIR / "calls"
+    per_call_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    html_path = per_call_dir / f"call_{ts}_{res_result.context_id or 'noctx'}.html"
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write("<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>")
+        f.write("<title>GAIA-Plus White Call</title></head><body>")
+        f.write("<h1>White agent call snapshot</h1>")
+        f.write("<h2>Question</h2><pre>")
+        f.write(question)
+        f.write("</pre>")
+        f.write("<h2>Answer</h2><pre>")
+        f.write(answer)
+        f.write("</pre>")
+        f.write("<h2>Environment</h2><pre>")
+        f.write(json.dumps(_snapshot_env_for_report(), indent=2, ensure_ascii=False))
+        f.write("</pre>")
+        f.write("</body></html>")
+
+    return answer, res_result.context_id, _snapshot_env_for_report()
 
 
 class GaiaGreenAgentExecutor(AgentExecutor):
@@ -308,7 +387,9 @@ class GaiaGreenAgentExecutor(AgentExecutor):
         # Connectivity check to ensure white agent can receive A2A call.
         ping_question = "[green] connectivity check: please reply with 'pong'."
         print(f"[green] sending connectivity ping to white url={self.white_url!r}")
-        ping_answer, _ = await ask_white_for_answer(self.white_url, ping_question, context_id=None)
+        ping_answer, _, _ = await ask_white_for_answer(
+            self.white_url, ping_question, context_id=None
+        )
         print(f"[green] connectivity ping answer_preview={ping_answer[:120]!r}")
 
         # Env validation
@@ -332,6 +413,8 @@ class GaiaGreenAgentExecutor(AgentExecutor):
         per_item: List[Dict[str, Any]] = []
         latencies: List[float] = []
         ems: List[float] = []
+        baseline_in_tokens_total = 0
+        baseline_out_tokens_total = 0
         started_at = datetime.utcnow().isoformat() + "Z"
         run_id = uuid.uuid4().hex
         total_start = time.perf_counter()
@@ -349,7 +432,7 @@ class GaiaGreenAgentExecutor(AgentExecutor):
             error_msg = None
             for attempt in range(self.retries + 1):
                 try:
-                    pred, ctx_id = await ask_white_for_answer(
+                    pred, ctx_id, _ = await ask_white_for_answer(
                         self.white_url, q_text, context_id=None
                     )
                     break
@@ -365,6 +448,21 @@ class GaiaGreenAgentExecutor(AgentExecutor):
                 successes += 1
             else:
                 errors += 1 if error_msg else 0
+
+            baseline_in_tokens = None
+            baseline_out_tokens = None
+            if isinstance(item.meta, dict):
+                efficiency = item.meta.get("efficiency")
+                if isinstance(efficiency, dict):
+                    in_tokens = efficiency.get("Baseline_Input_Tokens")
+                    out_tokens = efficiency.get("Baseline_Output_Tokens")
+                    if isinstance(in_tokens, (int, float)):
+                        baseline_in_tokens = int(in_tokens)
+                        baseline_in_tokens_total += baseline_in_tokens
+                    if isinstance(out_tokens, (int, float)):
+                        baseline_out_tokens = int(out_tokens)
+                        baseline_out_tokens_total += baseline_out_tokens
+
             per_item.append(
                 {
                     "id": item.id,
@@ -376,6 +474,8 @@ class GaiaGreenAgentExecutor(AgentExecutor):
                     "context_id": ctx_id,
                     "error": error_msg,
                     "level": item.level,
+                    "baseline_input_tokens": baseline_in_tokens,
+                    "baseline_output_tokens": baseline_out_tokens,
                 }
             )
             ems.append(em)
@@ -392,6 +492,8 @@ class GaiaGreenAgentExecutor(AgentExecutor):
             "n_skipped": skipped,
             "n_success": successes,
             "n_failed": len(items) - successes,
+            "baseline_input_tokens_total": baseline_in_tokens_total,
+            "baseline_output_tokens_total": baseline_out_tokens_total,
             "run_id": run_id,
             "started_at": started_at,
             "finished_at": datetime.utcnow().isoformat() + "Z",
@@ -406,11 +508,95 @@ class GaiaGreenAgentExecutor(AgentExecutor):
         # lightweight csv
         csv_path = OUTPUTS_DIR / "metrics.csv"
         with open(csv_path, "w", encoding="utf-8") as f:
-            f.write("id,pred,gold,em,latency\n")
+            f.write("id,pred,gold,em,latency,baseline_input_tokens,baseline_output_tokens\n")
             for row in per_item:
                 f.write(
-                    f"{row['id']},{row['pred'].replace(',',';')},{row['gold'].replace(',',';')},{row['em']},{row['latency']}\n"
+                    f"{row['id']},"
+                    f"{str(row['pred']).replace(',',';')},"
+                    f"{str(row['gold']).replace(',',';')},"
+                    f"{row['em']},"
+                    f"{row['latency']},"
+                    f"{row['baseline_input_tokens'] if row['baseline_input_tokens'] is not None else ''},"
+                    f"{row['baseline_output_tokens'] if row['baseline_output_tokens'] is not None else ''}\n"
                 )
+
+        # Static HTML report for quick inspection.
+        report_path = OUTPUTS_DIR / "report.html"
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write("<!DOCTYPE html>\n<html lang='en'>\n<head>\n<meta charset='UTF-8'>\n")
+            f.write("<title>GAIA-Plus Evaluation Report</title>\n")
+            f.write(
+                "<style>"
+                "body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;"
+                "margin:24px;background:#0b1120;color:#e5e7eb;}"
+                "h1{font-size:24px;margin-bottom:8px;}"
+                "h2{font-size:18px;margin-top:24px;margin-bottom:8px;}"
+                ".summary{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px;}"
+                ".card{background:#020617;border-radius:8px;padding:12px 16px;"
+                "box-shadow:0 10px 15px -3px rgba(15,23,42,0.4);}"
+                ".label{font-size:11px;text-transform:uppercase;color:#9ca3af;letter-spacing:.08em;}"
+                ".value{font-size:18px;font-weight:600;margin-top:2px;}"
+                "table{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px;}"
+                "th,td{padding:6px 8px;border-bottom:1px solid #1f2937;vertical-align:top;}"
+                "th{position:sticky;top:0;background:#020617;color:#d1d5db;text-align:left;}"
+                "tr:nth-child(even){background:#020617;}"
+                "tr:nth-child(odd){background:#020617;}"
+                ".em-good{color:#4ade80;font-weight:600;}"
+                ".em-bad{color:#f97373;font-weight:600;}"
+                ".mono{font-family:ui-monospace,Menlo,Monaco,Consolas,monospace;}"
+                "</style>\n</head>\n<body>\n"
+            )
+            f.write("<h1>GAIA-Plus Evaluation Report</h1>\n")
+            f.write("<div class='summary'>\n")
+            f.write(
+                f"<div class='card'><div class='label'>Exact match (mean)</div>"
+                f"<div class='value'>{em_mean:.3f}</div></div>\n"
+            )
+            f.write(
+                f"<div class='card'><div class='label'>Latency mean (s)</div>"
+                f"<div class='value'>{latency_mean:.3f}</div></div>\n"
+            )
+            f.write(
+                f"<div class='card'><div class='label'>Items</div>"
+                f"<div class='value'>{len(items)}</div></div>\n"
+            )
+            f.write(
+                f"<div class='card'><div class='label'>Skipped lines</div>"
+                f"<div class='value'>{skipped}</div></div>\n"
+            )
+            f.write(
+                f"<div class='card'><div class='label'>Baseline tokens (input / output)</div>"
+                f"<div class='value'>{baseline_in_tokens_total} / {baseline_out_tokens_total}</div></div>\n"
+            )
+            f.write("</div>\n")
+
+            f.write("<h2>Per-question details</h2>\n")
+            f.write("<div style='max-height:480px;overflow:auto;border-radius:8px;border:1px solid #1f2937;'>\n")
+            f.write(
+                "<table>\n<thead><tr>"
+                "<th>ID</th><th>Level</th><th>EM</th><th>Latency (s)</th>"
+                "<th>Baseline tokens (in/out)</th><th>Pred</th><th>Gold</th>"
+                "</tr></thead>\n<tbody>\n"
+            )
+            for row in per_item:
+                em_val = row["em"]
+                em_class = "em-good" if em_val == 1.0 else "em-bad"
+                baseline_pair = ""
+                if row["baseline_input_tokens"] is not None or row["baseline_output_tokens"] is not None:
+                    baseline_pair = f"{row['baseline_input_tokens'] or 0}/{row['baseline_output_tokens'] or 0}"
+                pred_preview = (str(row["pred"]) or "")[:160]
+                gold_preview = (str(row["gold"]) or "")[:160]
+                f.write("<tr>")
+                f.write(f"<td class='mono'>{row['id']}</td>")
+                f.write(f"<td>{row['level'] or ''}</td>")
+                f.write(f"<td class='{em_class}'>{em_val:.0f}</td>")
+                f.write(f"<td>{row['latency']:.3f}</td>")
+                f.write(f"<td class='mono'>{baseline_pair}</td>")
+                f.write(f"<td>{pred_preview}</td>")
+                f.write(f"<td>{gold_preview}</td>")
+                f.write("</tr>\n")
+            f.write("</tbody>\n</table>\n</div>\n")
+            f.write("</body>\n</html>\n")
 
         print("Green agent: Evaluation complete.", metrics)
         await event_queue.enqueue_event(

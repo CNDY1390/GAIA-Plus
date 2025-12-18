@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export HOST="${HOST:-0.0.0.0}"
-: "${AGENT_PORT:?AGENT_PORT not set}"
+export ROLE="green"
+export AGENT_PORT="9001"
 export PYTHONPATH="src"
+export CLOUDRUN_HOST="scenarios-liquid-hierarchy-isa.trycloudflare.com"
+export HTTPS_ENABLED="true"
+export PORT="8010"
+export HOST="0.0.0.0"
 
-exec uv run python -m green_agent.agent
+uv run agentbeats run_ctrl
+

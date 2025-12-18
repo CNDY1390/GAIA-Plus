@@ -115,6 +115,58 @@ def exact_match(pred: str, gold: str) -> float:
     return float(normalize_text(pred) == normalize_text(gold))
 
 
+def _safe_parse_task_payload(raw: str) -> Dict[str, Any]:
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+        return {"data": parsed}
+    except json.JSONDecodeError:
+        return {"text": raw}
+
+
+def extract_white_urls(request_dump: Dict[str, Any] | None, task_payload: Dict[str, Any]) -> List[str]:
+    def _extract_from_obj(obj: Dict[str, Any]) -> List[str]:
+        urls: List[str] = []
+        for key in ["participants", "participant_agents", "agents", "white_agents"]:
+            if key in obj and isinstance(obj[key], list):
+                for entry in obj[key]:
+                    if isinstance(entry, dict) and "url" in entry:
+                        urls.append(entry["url"])
+                    elif isinstance(entry, str) and entry.startswith("http"):
+                        urls.append(entry)
+        cfg = obj.get("config")
+        if isinstance(cfg, dict):
+            for key in ["white_agent_url", "white_url", "white"]:
+                value = cfg.get(key)
+                if isinstance(value, str) and value.startswith("http"):
+                    urls.append(value)
+                elif isinstance(value, list):
+                    urls.extend([v for v in value if isinstance(v, str) and v.startswith("http")])
+        return urls
+
+    # 1) try from request dump
+    if request_dump:
+        urls = _extract_from_obj(request_dump)
+        if urls:
+            return urls
+
+    # 2) then from task payload
+    urls = _extract_from_obj(task_payload)
+    if urls:
+        return urls
+
+    # 3) finally from env (local debug only)
+    env_url = os.getenv("DEFAULT_WHITE_AGENT_URL")
+    if env_url:
+        return [env_url]
+
+    raise RuntimeError("No white agent URL found from request/task/env.")
+
+
 async def ask_white_for_answer(
     white_agent_url: str, question: str, context_id: str | None = None
 ) -> tuple[str, str | None]:
@@ -146,33 +198,48 @@ class GaiaGreenAgentExecutor(AgentExecutor):
         self.retries = int(os.getenv("GREEN_RETRY", "1"))
         self.model = DEFAULT_MODEL
 
-    def _extract_white_urls(self, task_payload: Dict[str, Any]) -> List[str]:
-        for key in ["participants", "participant_agents", "agents", "white_agents"]:
-            if key in task_payload:
-                return [
-                    p["url"] if isinstance(p, dict) else p for p in task_payload[key]
-                ]
-        cfg = task_payload.get("config")
-        if isinstance(cfg, dict) and "white_agent_url" in cfg:
-            return [cfg["white_agent_url"]]
-        if isinstance(cfg, str) and "http" in cfg:
-            return [cfg]
-        env_url = os.getenv("DEFAULT_WHITE_AGENT_URL")
-        if env_url:
-            return [env_url]
-        raise RuntimeError("No white agent URL found in task payload/config/env.")
-
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         print("Green agent: Received a task, parsing...")
+
+        raw_request = getattr(context, "request", None)
+        print(f"[green] inbound RequestContext.request type={type(raw_request)}")
+        request_dump: Dict[str, Any] | None = None
+        if raw_request is not None:
+            if hasattr(raw_request, "model_dump"):
+                try:
+                    request_dump = raw_request.model_dump()  # type: ignore[assignment]
+                    print("[green] inbound request model_dump:")
+                    try:
+                        print(json.dumps(request_dump, indent=2, ensure_ascii=False, default=str))
+                    except TypeError:
+                        print(request_dump)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[green] ERROR while dumping request via model_dump: {e}")
+            elif hasattr(raw_request, "__dict__"):
+                request_dump = {
+                    k: v for k, v in raw_request.__dict__.items() if not k.startswith("_")
+                }
+                print("[green] inbound request __dict__:")
+                try:
+                    print(json.dumps(request_dump, indent=2, ensure_ascii=False, default=str))
+                except TypeError:
+                    print(request_dump)
+
         user_input = context.get_user_input()
-        try:
-            task_payload = json.loads(user_input)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid task payload JSON: {e}") from e
+        task_payload = _safe_parse_task_payload(user_input)
         print("[green] inbound task payload:")
         print(json.dumps(task_payload, indent=2, ensure_ascii=False))
-        white_urls = self._extract_white_urls(task_payload)
+
+        white_urls = extract_white_urls(request_dump, task_payload)
         self.white_url = white_urls[0]
+
+        print(f"[green] resolved white URLs={white_urls}")
+
+        # Connectivity check to ensure white agent can receive A2A call.
+        ping_question = "[green] connectivity check: please reply with 'pong'."
+        print(f"[green] sending connectivity ping to white url={self.white_url!r}")
+        ping_answer, _ = await ask_white_for_answer(self.white_url, ping_question, context_id=None)
+        print(f"[green] connectivity ping answer_preview={ping_answer[:120]!r}")
 
         # Env validation
         self.dataset_path = ensure_required_envs()

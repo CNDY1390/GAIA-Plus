@@ -146,33 +146,33 @@ class GaiaGreenAgentExecutor(AgentExecutor):
         self.retries = int(os.getenv("GREEN_RETRY", "1"))
         self.model = DEFAULT_MODEL
 
-    def _parse_task_config(self, user_input: str):
-        # Accept either JSON dict or tag-wrapped url/config.
-        try:
-            cfg = json.loads(user_input)
-            if "white_agent_url" in cfg:
-                self.white_url = cfg["white_agent_url"]
-            if "data_path" in cfg:
-                self.dataset_path = cfg["data_path"]
-            return
-        except Exception:
-            pass
-
-        if "<white_agent_url>" in user_input:
-            start = user_input.split("<white_agent_url>", 1)[1]
-            white_url = start.split("</white_agent_url>", 1)[0].strip()
-            if white_url:
-                self.white_url = white_url
-        if "<gaia_data_path>" in user_input:
-            start = user_input.split("<gaia_data_path>", 1)[1]
-            data_path = start.split("</gaia_data_path>", 1)[0].strip()
-            if data_path:
-                self.dataset_path = data_path
+    def _extract_white_urls(self, task_payload: Dict[str, Any]) -> List[str]:
+        for key in ["participants", "participant_agents", "agents", "white_agents"]:
+            if key in task_payload:
+                return [
+                    p["url"] if isinstance(p, dict) else p for p in task_payload[key]
+                ]
+        cfg = task_payload.get("config")
+        if isinstance(cfg, dict) and "white_agent_url" in cfg:
+            return [cfg["white_agent_url"]]
+        if isinstance(cfg, str) and "http" in cfg:
+            return [cfg]
+        env_url = os.getenv("DEFAULT_WHITE_AGENT_URL")
+        if env_url:
+            return [env_url]
+        raise RuntimeError("No white agent URL found in task payload/config/env.")
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         print("Green agent: Received a task, parsing...")
         user_input = context.get_user_input()
-        self._parse_task_config(user_input)
+        try:
+            task_payload = json.loads(user_input)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Invalid task payload JSON: {e}") from e
+        print("[green] inbound task payload:")
+        print(json.dumps(task_payload, indent=2, ensure_ascii=False))
+        white_urls = self._extract_white_urls(task_payload)
+        self.white_url = white_urls[0]
 
         # Env validation
         self.dataset_path = ensure_required_envs()

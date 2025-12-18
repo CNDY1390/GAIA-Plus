@@ -115,25 +115,28 @@ class GaiaWhiteAgentExecutor(AgentExecutor):
         raise NotImplementedError
 
 
-def _resolve_binding(default_host: str, default_port: int) -> tuple[str, int]:
-    env_host = os.getenv("HOST")
-    env_port = os.getenv("AGENT_PORT")
-    host = env_host or default_host
-    port = int(env_port) if env_port else default_port
-    return host, port
-
-
 def start_white_agent(
     agent_name: str = "gaia_white_agent",
     host: str | None = None,
     port: int | None = None,
-):
+) -> None:
+    # Resolve binding purely from env + optional explicit args
+    env_host = os.getenv("HOST")
+    env_port = os.getenv("AGENT_PORT")
+    resolved_host = host or env_host or "0.0.0.0"
+    resolved_port = port or (int(env_port) if env_port else 9002)
+
     print("Starting white agent...")
-    resolved_host, resolved_port = _resolve_binding(
-        host or "localhost",
-        port if port is not None else 9002,
+    print(
+        f"[white] env HOST={env_host!r}, AGENT_PORT={env_port!r}, "
+        f"AGENT_URL={os.getenv('AGENT_URL')!r}, "
+        f"CLOUDRUN_HOST={os.getenv('CLOUDRUN_HOST')!r}, "
+        f"HTTPS_ENABLED={os.getenv('HTTPS_ENABLED')!r}, "
+        f"resolved_host={resolved_host!r}, resolved_port={resolved_port!r}"
     )
-    card = prepare_white_agent_card(os.getenv("AGENT_URL"))
+
+    public_url = os.getenv("AGENT_URL") or f"http://{resolved_host}:{resolved_port}"
+    card = prepare_white_agent_card(public_url)
 
     request_handler = DefaultRequestHandler(
         agent_executor=GaiaWhiteAgentExecutor(),

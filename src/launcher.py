@@ -41,6 +41,9 @@ async def launch_evaluation():
     green_url = os.getenv("GREEN_URL")
     white_url = os.getenv("WHITE_URL")
     data_path = os.getenv("GAIA_PLUS_DATA", "data/gaia_plus.jsonl")
+    print(
+        f"[Launcher] env GREEN_URL={green_url!r}, WHITE_URL={white_url!r}, GAIA_PLUS_DATA={os.getenv('GAIA_PLUS_DATA')!r}"
+    )
     
     if not green_url:
         print("[FAIL] GREEN_URL environment variable not set")

@@ -286,26 +286,29 @@ class GaiaGreenAgentExecutor(AgentExecutor):
         raise NotImplementedError
 
 
-def _resolve_binding(default_host: str, default_port: int) -> tuple[str, int]:
-    env_host = os.getenv("HOST")
-    env_port = os.getenv("AGENT_PORT")
-    host = env_host or default_host
-    port = int(env_port) if env_port else default_port
-    return host, port
-
-
 def start_green_agent(
     agent_name: str = "gaia_green_agent",
     host: str | None = None,
     port: int | None = None,
-):
+) -> None:
+    # Resolve binding purely from env + optional explicit args
+    env_host = os.getenv("HOST")
+    env_port = os.getenv("AGENT_PORT")
+    resolved_host = host or env_host or "0.0.0.0"
+    resolved_port = port or (int(env_port) if env_port else 9001)
+
     print("Starting green agent...")
-    resolved_host, resolved_port = _resolve_binding(
-        host or "localhost",
-        port if port is not None else 9001,
+    print(
+        f"[green] env HOST={env_host!r}, AGENT_PORT={env_port!r}, "
+        f"AGENT_URL={os.getenv('AGENT_URL')!r}, "
+        f"CLOUDRUN_HOST={os.getenv('CLOUDRUN_HOST')!r}, "
+        f"HTTPS_ENABLED={os.getenv('HTTPS_ENABLED')!r}, "
+        f"resolved_host={resolved_host!r}, resolved_port={resolved_port!r}"
     )
+
     agent_card_dict = load_agent_card_toml(agent_name)
-    agent_card_dict["url"] = os.getenv("AGENT_URL")
+    public_url = os.getenv("AGENT_URL") or f"http://{resolved_host}:{resolved_port}"
+    agent_card_dict["url"] = public_url  # complete all required card fields
 
     request_handler = DefaultRequestHandler(
         agent_executor=GaiaGreenAgentExecutor(),

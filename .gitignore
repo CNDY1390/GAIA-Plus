@@ -23,9 +23,8 @@ AGENTS.md
 __pycache__/
 *.pyc
 outputs/
-data/
 cloudflared.exe
-*.ps1
+
 
 
 # Python-generated files
